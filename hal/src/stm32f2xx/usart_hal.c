@@ -43,6 +43,12 @@ typedef enum USART_Num_Def {
 
 /* Private macro -------------------------------------------------------------*/
 #define USE_USART3_HARDWARE_FLOW_CONTROL_RTS_CTS 0  //Enabling this => 1 is not working at present
+#define USART_WordLength_Invalid 0b1111 // Made up key for invalid data bit / parity bit combinations; should generate an assert_params failure in stm32f2xx_usart.h at IS_USART_WORD_LENGTH
+
+#define PARSE_USART_STOPBITS(CONFIG) 	((CONFIG & 0b00000011) >> 0) // stop bits [0b00 = 1 stop bit, 0b01 = 2 stop bits, 0b10 = 0.5 stop bits, 0b11 = 1.5 stop bits]
+#define PARSE_USART_PARITY(CONFIG) 		((CONFIG & 0b00001100) >> 2) // parity [0b00 = none, 0b01 = even, 0b10 = odd]
+#define PARSE_USART_DATABITS(CONFIG) 	((CONFIG & 0b00110000) >> 4) // data bits [0b00 = 5, 0b01 = 6, 0b10 = 7, 0b11 = 8]
+#define PARSE_USART_FLOWCTRL(CONFIG) 	((CONFIG & 0b11000000) >> 6) // hardware flow control [0b00 = none, 0b01 = RTS, 0b10 = CTS, 0b11 = RTS+CTS]
 
 /* Private variables ---------------------------------------------------------*/
 typedef struct STM32_USART_Info {
@@ -152,7 +158,7 @@ void HAL_USART_Init(HAL_USART_Serial serial, Ring_Buffer *rx_buffer, Ring_Buffer
 	usartMap[serial]->usart_transmitting = false;
 }
 
-void HAL_USART_Begin(HAL_USART_Serial serial, uint32_t baud)
+void HAL_USART_Begin(HAL_USART_Serial serial, uint32_t baud, uint8_t config)
 {
 	USART_DeInit(usartMap[serial]->usart_peripheral);
 
@@ -192,22 +198,80 @@ void HAL_USART_Begin(HAL_USART_Serial serial, uint32_t baud)
 	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
 	NVIC_Init(&NVIC_InitStructure);
 
-	// USART default configuration
-	// USART configured as follow:
-	// - BaudRate = (set baudRate as 9600 baud)
-	// - Word Length = 8 Bits
-	// - One Stop Bit
-	// - No parity
-	// - Hardware flow control disabled for Serial1/2/4/5
-    // - Hardware flow control enabled (RTS and CTS signals) for Serial3
-	// - Receive and transmit enabled
+	// USART  configuration (see stm32f2xx_usart.h for all compatible configurations)
+	// notes: word length = data bits + parity bit (if any)
 	USART_InitStructure.USART_BaudRate = baud;
-	USART_InitStructure.USART_WordLength = USART_WordLength_8b;
-	USART_InitStructure.USART_StopBits = USART_StopBits_1;
-	USART_InitStructure.USART_Parity = USART_Parity_No;
 	USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
-    USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+
+	// stop bits
+  	switch (PARSE_USART_STOPBITS(config)) {
+	    case 0: // 1 stop bit
+			USART_InitStructure.USART_StopBits = USART_StopBits_1;
+			break;
+	    case 1: // 2 stop bits
+			USART_InitStructure.USART_StopBits = USART_StopBits_2;
+			break;
+	    case 2: // 0.5 stop bits
+			USART_InitStructure.USART_StopBits = USART_StopBits_0_5;
+			break;
+	    case 3: // 1.5 stop bits
+			USART_InitStructure.USART_StopBits = USART_StopBits_1_5;
+			break;
+	}
+
+	// parity configuration (impacts word length)
+	switch (PARSE_USART_PARITY(config)) {
+		case 0: // none
+			USART_InitStructure.USART_Parity = USART_Parity_No;
+			break;
+		case 1: // even
+			USART_InitStructure.USART_Parity = USART_Parity_Even;
+			break;
+		case 2: // odd
+			USART_InitStructure.USART_Parity = USART_Parity_Odd;
+			break;
+	}
+
+	// word length = data bits + parity bit (STM32_F2xx only supports 8bit and 9bit word length)
+	switch (PARSE_USART_DATABITS(config)) {
+		case 0: // 5 data bits - not supported on STM32_F2xx
+			USART_InitStructure.USART_WordLength = USART_WordLength_Invalid;
+			break;
+		case 1: // 6 data bits - not supported on STM32_F2xx
+			USART_InitStructure.USART_WordLength = USART_WordLength_Invalid;
+			break;
+		case 2: // 7 data bits - only supported in even/odd parity bit mode
+			if (PARSE_USART_PARITY(config) == 0)
+				USART_InitStructure.USART_WordLength = USART_WordLength_Invalid;
+			else
+				USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+			break;
+		case 3: // 8 data bits
+			if (PARSE_USART_PARITY(config) == 0)
+				USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+			else
+				USART_InitStructure.USART_WordLength = USART_WordLength_9b;
+		default:
+	}
+
+	// hardware flow control
+	switch (PARSE_USART_FLOWCTRL(config)) {
+		case 0: // none
+		    USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+		    break;
+		case 1: // RTS
+		    USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+		    break;
+		case 2: // CTS
+		    USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+		    break;
+		case 3: // RTS+CTS
+		    USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_RTS_CTS;
+		    break;
+	}
+
 #if USE_USART3_HARDWARE_FLOW_CONTROL_RTS_CTS    // Electron
+	// force HW flow control for Serial3 on Electron
     if (serial == HAL_USART_SERIAL3)
     {
         USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_RTS_CTS;
